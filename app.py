@@ -24,23 +24,24 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from spl.token.constants import TOKEN_PROGRAM_ID
 from spl.token.async_client import AsyncToken
-from solana.system_program import transfer, TransferParams
+from solders.system_program import transfer, TransferParams  # Corrected import
 from jupiter_python_sdk.jupiter import Jupiter
 import websockets
 from dotenv import load_dotenv
 import os
 
 load_dotenv()
-BIRDEYE_API_KEY = os.getenv("2d70eda752394259a250250e8c98ae40")
+BIRDEYE_API_KEY = os.getenv("29159a646dca4648b1dd077d04737715")
 PLATFORM_PRIVATE_KEY = os.getenv("2wMpr8Lfk1cKdMLhimGMoWwieeJmmphkCSnjUn15EQaJ7vGkT3v9JjhP6aTRVsFH6msomTxHmFc7ezetgPQmo6fN")
 SMTP_SERVER = os.getenv("SMTP_SERVER")
-SMTP_PORT = int(os.getenv("SMTP_PORT"))
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 SMTP_SENDER = os.getenv("SMTP_SENDER")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # Constants
 SOLANA_RPC_URL = "https://solana-rpc.publicnode.com"
 SOLANA_WS_URL = "wss://solana-rpc.publicnode.com"
+BIRDEYE_API_URL = "https://public-api.birdeye.so"
 GOPLUS_API_URL = "https://api.gopluslabs.io/api/v1/token_security/"
 PLATFORM_WALLET = Pubkey.from_string("HJhtEGSgBN7fnfnKLgiTH8EAB3eL5QofXfWg3FHWyA2g")
 SUBSCRIPTION_FEE = 100_000_000  # 0.1 SOL
@@ -60,37 +61,47 @@ jupiter = Jupiter(
     swap_api_url="https://quote-api.jup.ag/v6/swap",
 )
 
-# WebSocket Loops (backend logic)
+# WebSocket Loops
 def pump_fun_ws_loop():
     async def main():
-        async with websockets.connect(PUMP_PORTAL_WS) as ws:
-            await ws.send(json.dumps({"method": "subscribeNewToken"}))
-            async for msg in ws:
-                data = json.loads(msg)
-                if 'mint' in data:
-                    new_tokens.append(data['mint'])
+        try:
+            async with websockets.connect(PUMP_PORTAL_WS) as ws:
+                await ws.send(json.dumps({"method": "subscribeNewToken"}))
+                async for msg in ws:
+                    data = json.loads(msg)
+                    if 'mint' in data:
+                        new_tokens.append(data['mint'])
+        except Exception as e:
+            st.error(f"Pump.fun WS error: {e}")
+            time.sleep(10)
+            asyncio.run(main())  # Retry
     asyncio.run(main())
 
 def solana_ws_loop(program_id):
     async def main():
-        async with websockets.connect(SOLANA_WS_URL) as ws:
-            sub = {"jsonrpc": "2.0", "id": 1, "method": "logsSubscribe", "params": [{"mentions": [str(program_id)]}, {"commitment": "processed"}]}
-            await ws.send(json.dumps(sub))
-            async for msg in ws:
-                data = json.loads(msg)
-                if 'result' in data and 'value' in data['result'] and 'logs' in data['result']['value']:
-                    logs = data['result']['value']['logs']
-                    for log in logs:
-                        if 'initialize' in log.lower():
-                            token = 'extracted_token_from_log'
-                            new_tokens.append(token)
+        try:
+            async with websockets.connect(SOLANA_WS_URL) as ws:
+                sub = {"jsonrpc": "2.0", "id": 1, "method": "logsSubscribe", "params": [{"mentions": [str(program_id)]}, {"commitment": "processed"}]}
+                await ws.send(json.dumps(sub))
+                async for msg in ws:
+                    data = json.loads(msg)
+                    if 'result' in data and 'value' in data['result'] and 'logs' in data['result']['value']:
+                        logs = data['result']['value']['logs']
+                        for log in logs:
+                            if 'initialize' in log.lower():
+                                token = 'extracted_token_from_log'  # Placeholder
+                                new_tokens.append(token)
+        except Exception as e:
+            st.error(f"Solana WS error: {e}")
+            time.sleep(10)
+            asyncio.run(main())  # Retry
     asyncio.run(main())
 
 threading.Thread(target=pump_fun_ws_loop, daemon=True).start()
 threading.Thread(target=solana_ws_loop, args=(RAYDIUM_PROGRAM_ID,), daemon=True).start()
 threading.Thread(target=solana_ws_loop, args=(METEORA_PROGRAM_ID,), daemon=True).start()
 
-# Fetch token data (backend logic)
+# Backend Logic
 def fetch_token_data(token_address):
     headers = {"X-API-KEY": BIRDEYE_API_KEY}
     response = requests.get(f"{BIRDEYE_API_URL}/defi/token_overview?address={token_address}", headers=headers)
@@ -115,7 +126,6 @@ def fetch_token_data(token_address):
         return token_info
     return None
 
-# Fetch chart (backend logic)
 def fetch_token_chart(token_address):
     headers = {"X-API-KEY": BIRDEYE_API_KEY}
     params = {
@@ -133,7 +143,6 @@ def fetch_token_chart(token_address):
         return df
     return None
 
-# Scan tokens (backend logic)
 def scan_profitable_tokens():
     tokens = []
     potential_tokens = list(set(new_tokens))
@@ -157,7 +166,6 @@ def scan_profitable_tokens():
                 tokens.append(token_data)
     return tokens
 
-# Visualize clusters (frontend in Streamlit)
 def visualize_clusters(tokens):
     if not tokens:
         return
@@ -180,7 +188,6 @@ def visualize_clusters(tokens):
     plt.colorbar(scatter)
     st.pyplot(fig)
 
-# Search tokens (backend logic)
 def search_tokens(query):
     headers = {"X-API-KEY": BIRDEYE_API_KEY}
     params = {"query": query, "sort_by": "v24hUSD_desc", "limit": 10}
@@ -209,7 +216,6 @@ def search_tokens(query):
         return tokens
     return []
 
-# Wallet connection (frontend in Streamlit)
 @st.cache_resource
 def connect_wallet():
     private_key = st.text_input("Enter Solana Private Key (Base58) for demo:", type="password")
@@ -230,7 +236,6 @@ def connect_wallet():
             st.error("Invalid private key.")
     return False
 
-# Subscription (backend logic)
 async def subscribe_premium(user_keypair):
     transfer_ix = transfer(TransferParams(
         from_pubkey=user_keypair.pubkey(),
@@ -242,7 +247,6 @@ async def subscribe_premium(user_keypair):
     st.success(f"Subscription paid: Tx {result.value}")
     st.session_state['premium'] = True
 
-# Swap (backend logic)
 async def perform_swap(user_keypair, input_mint, output_mint, amount_lamports, slippage_bps=50):
     fee_lamports = int(amount_lamports * TRADE_FEE_PCT)
     net_amount = amount_lamports - fee_lamports
@@ -287,7 +291,6 @@ async def sell_token_async(token_address, amount_token):
     tx_id = await perform_swap(user_keypair, input_mint, output_mint, amount_lamports)
     st.success(f"Sold token {token_address} Tx: {tx_id}")
 
-# SL monitor (backend logic)
 def monitor_sl(token_address, sl_price, user_email):
     while True:
         response = requests.get(f"{BIRDEYE_API_URL}/defi/price?address={token_address}", headers={"X-API-KEY": BIRDEYE_API_KEY})
@@ -313,7 +316,6 @@ def send_email(to_email, subject, body):
     except Exception as e:
         st.error(f"Email error: {e}")
 
-# Portfolio (backend logic)
 async def track_portfolio(user_keypair):
     sol_balance = (await async_client.get_balance(user_keypair.pubkey())).value / 1e9
     token_accounts = (await async_client.get_token_accounts_by_owner(user_keypair.pubkey(), TOKEN_PROGRAM_ID)).value
@@ -342,7 +344,7 @@ async def track_portfolio(user_keypair):
         st.pyplot(fig2)
     return holdings, total_value
 
-# UI (frontend in Streamlit)
+# Streamlit UI
 st.set_page_config(page_title="Trendiz", layout="wide", initial_sidebar_state="expanded")
 st.markdown("""
 <style>
